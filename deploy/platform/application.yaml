@@ -1,0 +1,164 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kubesqueeze-config
+  namespace: kubesqueeze-system
+data:
+  DATABASE_URL: postgres://kubesqueeze:kubesqueeze@postgres:5432/kubesqueeze?sslmode=disable
+  PROMETHEUS_URL: http://prometheus:9090
+  CLUSTER_ID: cluster-acme-kind
+  TENANT_ID: tenant-acme
+  COLLECTOR_PERIOD: 45s
+  WORKER_POLL_PERIOD: 2s
+  VERIFY_TIMEOUT: 90s
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kubesqueeze-migrate
+  namespace: kubesqueeze-system
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migrate
+          image: kubesqueeze:dev
+          imagePullPolicy: Never
+          args: ["migrate"]
+          envFrom:
+            - configMapRef:
+                name: kubesqueeze-config
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kubesqueeze-seed-metrics
+  namespace: kubesqueeze-system
+spec:
+  backoffLimit: 5
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: seed
+          image: kubesqueeze:dev
+          imagePullPolicy: Never
+          args: ["seed-metrics"]
+          envFrom:
+            - configMapRef:
+                name: kubesqueeze-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kubesqueeze
+  namespace: kubesqueeze-system
+spec:
+  type: NodePort
+  selector:
+    app: kubesqueeze-server
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 30080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kubesqueeze-server
+  namespace: kubesqueeze-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kubesqueeze-server
+  template:
+    metadata:
+      labels:
+        app: kubesqueeze-server
+    spec:
+      serviceAccountName: kubesqueeze-server
+      containers:
+        - name: server
+          image: kubesqueeze:dev
+          imagePullPolicy: Never
+          args: ["server"]
+          envFrom:
+            - configMapRef:
+                name: kubesqueeze-config
+          env:
+            - name: WEB_DIST_DIR
+              value: /app/web
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /api/healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kubesqueeze-collector
+  namespace: kubesqueeze-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kubesqueeze-collector
+  template:
+    metadata:
+      labels:
+        app: kubesqueeze-collector
+    spec:
+      serviceAccountName: kubesqueeze-collector
+      containers:
+        - name: collector
+          image: kubesqueeze:dev
+          imagePullPolicy: Never
+          args: ["collector"]
+          envFrom:
+            - configMapRef:
+                name: kubesqueeze-config
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kubesqueeze-executor
+  namespace: kubesqueeze-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kubesqueeze-executor
+  template:
+    metadata:
+      labels:
+        app: kubesqueeze-executor
+    spec:
+      serviceAccountName: kubesqueeze-executor
+      containers:
+        - name: executor
+          image: kubesqueeze:dev
+          imagePullPolicy: Never
+          args: ["executor"]
+          envFrom:
+            - configMapRef:
+                name: kubesqueeze-config
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi

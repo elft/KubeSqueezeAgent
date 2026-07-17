@@ -1,0 +1,51 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: go test ./...
+      - run: npm ci
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+      - run: kubectl kustomize deploy >/dev/null
+
+  kind:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        node-image:
+          - kindest/node:v1.34.3@sha256:08497ee19eace7b4b5348db5c6a1591d7752b164530a36f855cb0f2bdcbadd48
+          - kindest/node:v1.35.0@sha256:452d707d4862f52530247495d180205e029056831160e22870e37e3f6c1ac31f
+    steps:
+      - uses: actions/checkout@v4
+      - uses: helm/kind-action@v1.14.0
+        with:
+          cluster_name: kubesqueeze
+          config: deploy/kind/cluster.yaml
+          node_image: ${{ matrix.node-image }}
+      - run: make kind-up
+      - run: curl --fail --show-error http://127.0.0.1:8080/api/healthz
+      - run: curl --fail --show-error http://127.0.0.1:8080/api/v1/recommendations
+      - if: failure()
+        run: kubectl get pods,jobs -A && kubectl -n kubesqueeze-system logs deployment/kubesqueeze-collector --tail=200

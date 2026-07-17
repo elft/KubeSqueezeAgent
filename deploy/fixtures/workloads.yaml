@@ -1,0 +1,466 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: development
+  labels:
+    environment: development
+    owner: platform-engineering
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: production
+  labels:
+    environment: production
+    protected: "true"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: preview-pr-1842
+  labels:
+    environment: preview
+    preview-age: 9d
+    pull-request: "1842"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: preview-pr-1901
+  labels:
+    environment: preview
+    preview-age: 2d
+    pull-request: "1901"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: customer-demos
+  labels:
+    environment: development
+    customer-facing: "true"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: checkout-feature-flags
+  namespace: development
+data:
+  new-checkout: "true"
+  synthetic-load-profile: office-hours
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalog-preview
+  namespace: preview-pr-1842
+  labels:
+    app: catalog-preview
+    environment: preview
+    preview.kubesqueeze.io/owner: pr-1842
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: catalog-preview
+  template:
+    metadata:
+      labels:
+        app: catalog-preview
+      annotations:
+        prometheus.io/scrape: "true"
+    spec:
+      containers:
+        - name: workload
+          image: kubesqueeze:dev
+          imagePullPolicy: Never
+          args: ["workload"]
+          env:
+            - {name: WORKLOAD_NAME, value: catalog-preview}
+            - name: WORKLOAD_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+            - {name: UTILIZATION_PATTERN, value: abandoned}
+            - {name: BASE_CPU_CORES, value: "0.008"}
+            - {name: PEAK_CPU_CORES, value: "0.02"}
+          ports: [{name: http, containerPort: 8081}]
+          readinessProbe: {httpGet: {path: /healthz, port: 8081}, initialDelaySeconds: 1, periodSeconds: 3}
+          resources:
+            requests: {cpu: 500m, memory: 128Mi}
+            limits: {cpu: "1", memory: 256Mi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: search-preview
+  namespace: preview-pr-1901
+  labels: {app: search-preview, environment: preview}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: search-preview}}
+  template:
+    metadata:
+      labels: {app: search-preview}
+      annotations: {prometheus.io/scrape: "true"}
+    spec:
+      containers:
+        - name: workload
+          image: kubesqueeze:dev
+          imagePullPolicy: Never
+          args: ["workload"]
+          env:
+            - {name: WORKLOAD_NAME, value: search-preview}
+            - name: WORKLOAD_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+            - {name: UTILIZATION_PATTERN, value: bursty}
+            - {name: BASE_CPU_CORES, value: "0.03"}
+            - {name: PEAK_CPU_CORES, value: "0.18"}
+          ports: [{containerPort: 8081}]
+          readinessProbe: {httpGet: {path: /healthz, port: 8081}, initialDelaySeconds: 1, periodSeconds: 3}
+          resources:
+            requests: {cpu: 300m, memory: 96Mi}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: search-preview
+  namespace: preview-pr-1901
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: search-preview}
+  minReplicas: 1
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: 65}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkout-api
+  namespace: development
+  labels: {app: checkout-api, environment: development, team: checkout}
+spec:
+  replicas: 5
+  strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 1, maxSurge: 1}}
+  selector: {matchLabels: {app: checkout-api}}
+  template:
+    metadata:
+      labels: {app: checkout-api, tier: api}
+      annotations: {prometheus.io/scrape: "true"}
+    spec:
+      topologySpreadConstraints:
+        - maxSkew: 2
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector: {matchLabels: {app: checkout-api}}
+      containers:
+        - name: workload
+          image: kubesqueeze:dev
+          imagePullPolicy: Never
+          args: ["workload"]
+          env:
+            - {name: WORKLOAD_NAME, value: checkout-api}
+            - name: WORKLOAD_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+            - {name: UTILIZATION_PATTERN, value: office-hours}
+            - {name: BASE_CPU_CORES, value: "0.18"}
+            - {name: PEAK_CPU_CORES, value: "0.62"}
+          ports: [{containerPort: 8081}]
+          readinessProbe: {httpGet: {path: /healthz, port: 8081}, initialDelaySeconds: 1, periodSeconds: 3}
+          resources:
+            requests: {cpu: 500m, memory: 192Mi}
+            limits: {cpu: "1", memory: 384Mi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recommendation-api
+  namespace: development
+  labels: {app: recommendation-api, environment: development, team: discovery}
+spec:
+  replicas: 4
+  selector: {matchLabels: {app: recommendation-api}}
+  template:
+    metadata:
+      labels: {app: recommendation-api, tier: api}
+      annotations: {prometheus.io/scrape: "true"}
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 50
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector: {matchLabels: {app: recommendation-api}}
+      containers:
+        - name: workload
+          image: kubesqueeze:dev
+          imagePullPolicy: Never
+          args: ["workload"]
+          env:
+            - {name: WORKLOAD_NAME, value: recommendation-api}
+            - name: WORKLOAD_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+            - {name: UTILIZATION_PATTERN, value: steady}
+            - {name: BASE_CPU_CORES, value: "0.22"}
+            - {name: PEAK_CPU_CORES, value: "0.48"}
+          ports: [{containerPort: 8081}]
+          readinessProbe: {httpGet: {path: /healthz, port: 8081}, initialDelaySeconds: 1, periodSeconds: 3}
+          resources:
+            requests: {cpu: 400m, memory: 256Mi}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: recommendation-api
+  namespace: development
+spec:
+  minAvailable: 3
+  selector: {matchLabels: {app: recommendation-api}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rollback-demo
+  namespace: development
+  labels: {app: rollback-demo, environment: development, team: reliability}
+  annotations:
+    demo.kubesqueeze.io/simulate-health-failure: "true"
+spec:
+  replicas: 4
+  selector: {matchLabels: {app: rollback-demo}}
+  template:
+    metadata:
+      labels: {app: rollback-demo}
+      annotations: {prometheus.io/scrape: "true"}
+    spec:
+      containers:
+        - name: workload
+          image: kubesqueeze:dev
+          imagePullPolicy: Never
+          args: ["workload"]
+          env:
+            - {name: WORKLOAD_NAME, value: rollback-demo}
+            - name: WORKLOAD_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+            - {name: UTILIZATION_PATTERN, value: office-hours}
+            - {name: BASE_CPU_CORES, value: "0.12"}
+            - {name: PEAK_CPU_CORES, value: "0.42"}
+          ports: [{containerPort: 8081}]
+          readinessProbe: {httpGet: {path: /healthz, port: 8081}, initialDelaySeconds: 1, periodSeconds: 3}
+          resources:
+            requests: {cpu: 500m, memory: 192Mi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-simulator
+  namespace: development
+  labels: {app: payment-simulator, environment: development, always-on: "true"}
+spec:
+  replicas: 3
+  selector: {matchLabels: {app: payment-simulator}}
+  template:
+    metadata:
+      labels: {app: payment-simulator}
+      annotations: {prometheus.io/scrape: "true"}
+    spec:
+      containers:
+        - name: workload
+          image: kubesqueeze:dev
+          imagePullPolicy: Never
+          args: ["workload"]
+          env:
+            - {name: WORKLOAD_NAME, value: payment-simulator}
+            - name: WORKLOAD_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+            - {name: UTILIZATION_PATTERN, value: steady}
+            - {name: BASE_CPU_CORES, value: "0.34"}
+            - {name: PEAK_CPU_CORES, value: "0.70"}
+          ports: [{containerPort: 8081}]
+          readinessProbe: {httpGet: {path: /healthz, port: 8081}, initialDelaySeconds: 1, periodSeconds: 3}
+          resources:
+            requests: {cpu: 500m, memory: 256Mi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sales-demo
+  namespace: customer-demos
+  labels: {app: sales-demo, environment: development, customer-demo: "true"}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: sales-demo}}
+  template:
+    metadata:
+      labels: {app: sales-demo, customer-demo: "true"}
+      annotations: {prometheus.io/scrape: "true"}
+    spec:
+      containers:
+        - name: workload
+          image: kubesqueeze:dev
+          imagePullPolicy: Never
+          args: ["workload"]
+          env:
+            - {name: WORKLOAD_NAME, value: sales-demo}
+            - name: WORKLOAD_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+            - {name: UTILIZATION_PATTERN, value: bursty}
+            - {name: BASE_CPU_CORES, value: "0.08"}
+            - {name: PEAK_CPU_CORES, value: "0.45"}
+          ports: [{containerPort: 8081}]
+          readinessProbe: {httpGet: {path: /healthz, port: 8081}, initialDelaySeconds: 1, periodSeconds: 3}
+          resources:
+            requests: {cpu: 400m, memory: 128Mi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments-api
+  namespace: production
+  labels: {app: payments-api, environment: production, criticality: tier-0}
+spec:
+  replicas: 5
+  selector: {matchLabels: {app: payments-api}}
+  template:
+    metadata:
+      labels: {app: payments-api, criticality: tier-0}
+      annotations: {prometheus.io/scrape: "true"}
+    spec:
+      priorityClassName: production-critical
+      containers:
+        - name: workload
+          image: kubesqueeze:dev
+          imagePullPolicy: Never
+          args: ["workload"]
+          env:
+            - {name: WORKLOAD_NAME, value: payments-api}
+            - name: WORKLOAD_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+            - {name: UTILIZATION_PATTERN, value: production}
+            - {name: BASE_CPU_CORES, value: "1.3"}
+            - {name: PEAK_CPU_CORES, value: "2.8"}
+          ports: [{containerPort: 8081}]
+          readinessProbe: {httpGet: {path: /healthz, port: 8081}, initialDelaySeconds: 1, periodSeconds: 3}
+          resources:
+            requests: {cpu: "1", memory: 512Mi}
+            limits: {cpu: "2", memory: 1Gi}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: payments-api
+  namespace: production
+spec:
+  minAvailable: 4
+  selector: {matchLabels: {app: payments-api}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orders-api
+  namespace: production
+  labels: {app: orders-api, environment: production, criticality: tier-1}
+spec:
+  replicas: 4
+  selector: {matchLabels: {app: orders-api}}
+  template:
+    metadata:
+      labels: {app: orders-api}
+      annotations: {prometheus.io/scrape: "true"}
+    spec:
+      containers:
+        - name: workload
+          image: kubesqueeze:dev
+          imagePullPolicy: Never
+          args: ["workload"]
+          env:
+            - {name: WORKLOAD_NAME, value: orders-api}
+            - name: WORKLOAD_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+            - {name: UTILIZATION_PATTERN, value: production}
+            - {name: BASE_CPU_CORES, value: "0.9"}
+            - {name: PEAK_CPU_CORES, value: "2.1"}
+          ports: [{containerPort: 8081}]
+          readinessProbe: {httpGet: {path: /healthz, port: 8081}, initialDelaySeconds: 1, periodSeconds: 3}
+          resources:
+            requests: {cpu: 750m, memory: 384Mi}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: orders-api
+  namespace: production
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: orders-api}
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: 70}
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: production-critical
+value: 100000
+globalDefault: false
+description: Production workloads that KubeSqueeze must never modify.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-simulation
+  namespace: development
+spec:
+  clusterIP: None
+  selector: {app: redis-simulation}
+  ports: [{port: 8081, targetPort: 8081}]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-simulation
+  namespace: development
+  labels: {app: redis-simulation, environment: development, data-classification: synthetic}
+spec:
+  serviceName: redis-simulation
+  replicas: 3
+  selector: {matchLabels: {app: redis-simulation}}
+  template:
+    metadata:
+      labels: {app: redis-simulation}
+      annotations: {prometheus.io/scrape: "true"}
+    spec:
+      containers:
+        - name: workload
+          image: kubesqueeze:dev
+          imagePullPolicy: Never
+          args: ["workload"]
+          env:
+            - {name: WORKLOAD_NAME, value: redis-simulation}
+            - name: WORKLOAD_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+            - {name: UTILIZATION_PATTERN, value: steady}
+            - {name: BASE_CPU_CORES, value: "0.15"}
+            - {name: PEAK_CPU_CORES, value: "0.35"}
+          ports: [{containerPort: 8081}]
+          readinessProbe: {httpGet: {path: /healthz, port: 8081}, initialDelaySeconds: 1, periodSeconds: 3}
+          resources:
+            requests: {cpu: 300m, memory: 256Mi}
+          volumeMounts: [{name: data, mountPath: /data}]
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: redis-simulation
+  namespace: development
+spec:
+  maxUnavailable: 1
+  selector: {matchLabels: {app: redis-simulation}}

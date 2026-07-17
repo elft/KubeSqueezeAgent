@@ -1,0 +1,51 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Go: API server",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "program": "${workspaceFolder}/cmd/kubesqueeze",
+      "args": ["server"],
+      "env": {
+        "DATABASE_URL": "postgres://kubesqueeze:kubesqueeze@127.0.0.1:5432/kubesqueeze?sslmode=disable",
+        "PROMETHEUS_URL": "http://127.0.0.1:9090",
+        "WEB_DIST_DIR": "${workspaceFolder}/web/dist"
+      }
+    },
+    {
+      "name": "Go: collector",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "program": "${workspaceFolder}/cmd/kubesqueeze",
+      "args": ["collector"],
+      "env": {
+        "DATABASE_URL": "postgres://kubesqueeze:kubesqueeze@127.0.0.1:5432/kubesqueeze?sslmode=disable",
+        "PROMETHEUS_URL": "http://127.0.0.1:9090",
+        "KUBECONFIG": "${env:HOME}/.kube/config"
+      }
+    },
+    {
+      "name": "Go: executor",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "program": "${workspaceFolder}/cmd/kubesqueeze",
+      "args": ["executor"],
+      "env": {
+        "DATABASE_URL": "postgres://kubesqueeze:kubesqueeze@127.0.0.1:5432/kubesqueeze?sslmode=disable",
+        "KUBECONFIG": "${env:HOME}/.kube/config"
+      }
+    },
+    {
+      "name": "Browser: Vite client",
+      "type": "chrome",
+      "request": "launch",
+      "url": "http://127.0.0.1:5173",
+      "webRoot": "${workspaceFolder}/web/src",
+      "sourceMaps": true
+    }
+  ]
+}
